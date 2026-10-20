@@ -22,10 +22,10 @@ Shared code owns provider HTTP, the tool loop, persistence, scope validation, er
 
 1. `BaseAgent.run` validates the agent configuration and creates or resumes a case.
 2. It snapshots that agent's current provider and model into `CaseContext`.
-3. It loads memory for the exact `case_id` and `agent_id` namespace.
+3. It loads bounded, verified evidence from the exact case as model context; prior model conclusions are not trusted memory.
 4. It loads agent skills, builds instructions, and registers only allowed tools.
-5. `AgentRuntime.execute` obtains bounded tool choices from the selected model adapter or the deterministic offline planner.
-6. `ToolRegistry.execute` validates arguments and enforces permission and call budgets before calling a handler.
+5. `AgentRuntime.execute` repeatedly asks the selected model, appends every assistant tool request, and returns each validated tool result to the next model round. Offline mode uses an explicitly labeled deterministic plan.
+6. `ToolRegistry.execute` validates arguments and enforces permission, scope, time, repetition, and call budgets before calling a handler.
 7. The concrete `interpret_result` converts returned evidence to typed facts, hypotheses, gaps, and recommendations.
 8. The evidence validator checks machine-verifiable references and prohibited claims.
 9. `BaseAgent` persists evidence, tool calls, the run, status, and a non-evidentiary memory summary.
@@ -41,10 +41,10 @@ Shared code owns provider HTTP, the tool loop, persistence, scope validation, er
 | --- | --- | --- | --- | --- |
 | Config purpose | Routing/reporting | Alert/session triage | Static file/IOC | Hypothesis hunt |
 | Skills | Selective routing, synthesis | SSH sequence, gaps | Safe static, reputation | Hypothesis, alternatives |
-| Tools | Typed delegation | Auth/session/events | Static/IOC/events | Events/indicator |
+| Tools | Delegation/case reads | Auth/session/events | Static/IOC/hash intel | Three bounded hunt views |
 | Interpretation | Combines specialist contracts | Separates auth facts | Avoids family verdicts | Correlation remains bounded |
 
-All use the same `run`, `chat`, statuses, model resolution, memory, runtime, and storage.
+All structured investigations use the same `run`, statuses, model resolution, verified case evidence, runtime, and storage. Conversational `chat_message` is deliberately separate: it sends bounded user conversation to the selected model, creates no synthetic alert, runs no investigation tool, and persists no case.
 
 ## Add a fifth agent
 

@@ -13,8 +13,13 @@ class Settings(BaseModel):
     connector_mode: str = Field(default_factory=lambda: os.getenv("VIGIL_CONNECTOR_MODE", "mock"))
     api_token: str | None = Field(default_factory=lambda: os.getenv("VIGIL_API_TOKEN"))
     max_tool_calls: int = 6
+    max_rounds: int = 6
+    max_tool_calls_per_round: int = 4
+    max_context_chars: int = 32_000
     max_events: int = 100
     max_file_bytes: int = 5 * 1024 * 1024
+    worker_lease_seconds: int = 120
+    worker_max_attempts: int = 3
     fixture_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[2] / "fixtures")
     analysis_dir: Path = Field(default_factory=lambda: Path(os.getenv("VIGIL_ANALYSIS_DIR", Path(__file__).resolve().parents[2] / "fixtures" / "safe_samples")))
 

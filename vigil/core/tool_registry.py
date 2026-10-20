@@ -45,8 +45,8 @@ class ToolRegistry:
     def tools(self) -> list[ToolDefinition]:
         return list(self._tools.values())
 
-    async def execute(self, name: str, arguments: dict[str, Any], context: CaseContext) -> tuple[ToolCallRecord, Any]:
-        call_id = f"call-{uuid4().hex[:12]}"
+    async def execute(self, name: str, arguments: dict[str, Any], context: CaseContext, *, call_id: str | None = None) -> tuple[ToolCallRecord, Any]:
+        call_id = call_id or f"call-{uuid4().hex[:12]}"
         if name not in self.allowed_names or name not in self._tools:
             return ToolCallRecord(call_id=call_id, tool_name=name, arguments={}, status="denied", error="tool not allowed"), None
         if self.call_count >= self.max_calls:
@@ -61,6 +61,8 @@ class ToolRegistry:
             return record, value
         except ValidationError as exc:
             return ToolCallRecord(call_id=call_id, tool_name=name, arguments={}, status="invalid_arguments", error=str(exc).splitlines()[0]), None
+        except PermissionError as exc:
+            return ToolCallRecord(call_id=call_id, tool_name=name, arguments={}, status="denied", error=str(exc)), None
         except Exception as exc:
             return ToolCallRecord(call_id=call_id, tool_name=name, arguments={}, status="failed", error=f"{type(exc).__name__}: {exc}"), None
 

@@ -1,0 +1,48 @@
+{
+  "hits": {
+    "hits": [
+      {
+        "_id": "log-001",
+        "_index": "wazuh-alerts-4.x-2026.10.19",
+        "_source": {
+          "timestamp": "2026-10-19T10:00:00Z",
+          "agent": {"id": "001", "name": "web-01"},
+          "decoder": {"name": "sshd"},
+          "rule": {"id": "5710", "description": "sshd: authentication failed", "firedtimes": 15},
+          "data": {"srcip": "192.0.2.10", "dstip": "10.0.0.10", "srcuser": "admin"}
+        }
+      },
+      {
+        "_id": "log-002",
+        "_index": "wazuh-alerts-4.x-2026.10.19",
+        "_source": {
+          "timestamp": "2026-10-19T10:07:00Z",
+          "agent": {"id": "001", "name": "web-01"},
+          "decoder": {"name": "sshd"},
+          "rule": {"id": "5715", "description": "sshd: authentication success"},
+          "data": {"srcip": "192.0.2.10", "dstip": "10.0.0.10", "srcuser": "admin"}
+        }
+      },
+      {
+        "_id": "session-001",
+        "_index": "wazuh-alerts-4.x-2026.10.19",
+        "_source": {
+          "timestamp": "2026-10-19T10:07:03Z",
+          "agent": {"id": "001", "name": "web-01"},
+          "rule": {"id": "5501", "description": "User session opened"},
+          "data": {"srcip": "192.0.2.10", "dstip": "10.0.0.10", "srcuser": "admin", "action": "session_started"}
+        }
+      },
+      {
+        "_id": "session-002",
+        "_index": "wazuh-alerts-4.x-2026.10.19",
+        "_source": {
+          "timestamp": "2026-10-19T10:08:00Z",
+          "agent": {"id": "001", "name": "web-01"},
+          "rule": {"id": "5502", "description": "Command observed"},
+          "data": {"srcip": "192.0.2.10", "dstip": "10.0.0.10", "srcuser": "admin", "command": "whoami"}
+        }
+      }
+    ]
+  }
+}

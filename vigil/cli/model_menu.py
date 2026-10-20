@@ -225,6 +225,15 @@ async def _configure_agent(manager, agent: str) -> bool:
             return False
         manager.assign(agent, provider_id, selected.model_id)
         capability = tool_capability(selected.model_id)
+        try:
+            consent = console.input("Run a small live tool-calling compatibility probe? [y/N]: ").strip().casefold()
+        except (EOFError, KeyboardInterrupt):
+            consent = ""
+        if consent in {"y", "yes"}:
+            try:
+                capability = await manager.probe_tool_capability(agent)
+            except Exception as exc:
+                capability = f"probe failed ({exc})"
         console.print(Panel(
             f"[green]Saved[/green]  {agent.title()} -> {provider.display_name} / {selected.model_id}\n"
             f"Tool-calling capability: {capability}. Run [bold]vigil doctor[/bold] before a live investigation.",

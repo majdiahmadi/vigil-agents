@@ -1,4 +1,4 @@
-from vigil.integrations.threat_intel.connector import ThreatIntelConnector
+from vigil.integrations.threat_intel.connector import ThreatIntelError, VirusTotalHashConnector
 
-__all__ = ["ThreatIntelConnector"]
+__all__ = ["ThreatIntelError", "VirusTotalHashConnector"]
 

@@ -31,4 +31,6 @@ def test_validation_and_health(registry):
     assert client.get("/health").status_code == 200
     headers = {"Authorization": "Bearer test-token"}
     assert client.post("/api/v1/investigations", json={"alert": {}}, headers=headers).status_code == 422
+    oversized = {"alert": {"description": "x" * (256 * 1024)}}
+    assert client.post("/api/v1/investigations", json=oversized, headers=headers).status_code == 413
 

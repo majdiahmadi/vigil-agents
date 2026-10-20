@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import typer
@@ -14,6 +15,7 @@ from vigil.cli.model_menu import run_model_wizard
 from vigil.cli.output import print_agent_result, print_json
 from vigil.cli.provider_menu import manage_credentials
 from vigil.core.models import AgentRequest, AlertEnvelope
+from vigil.integrations import SearchFilters
 
 app = typer.Typer(help="VIGIL - evidence-grounded multi-agent SOC investigations", invoke_without_command=True)
 model_app = typer.Typer(help="Discover and assign provider models", invoke_without_command=True)
@@ -68,13 +70,16 @@ def _run(agent_id: str, alert: Path) -> None:
 
 
 def _run_query(agent_id: str, query: str, registry, *, json_output: bool = False) -> None:
-    alert = AlertEnvelope.from_payload({"alert": {"category": "interactive task", "description": query}}, source="cli-query")
-    with console.status(f"[cyan]{agent_id.title()} is investigating...[/cyan]", spinner="dots"):
-        result = asyncio.run(registry.create(agent_id).chat(AgentRequest(alert=alert)))
+    try:
+        with console.status(f"[cyan]{agent_id.title()} is responding...[/cyan]", spinner="dots"):
+            response = asyncio.run(registry.create(agent_id).chat_message(query, []))
+    except RuntimeError as exc:
+        console.print(f"[yellow]{exc}[/yellow]")
+        return
     if json_output:
-        print_json(result)
+        print_json({"agent_id": agent_id, "mode": "chat", "response": response})
     else:
-        print_agent_result(result, target=console)
+        console.print(response)
 
 
 @app.command("chat")
@@ -157,7 +162,30 @@ def provider():
 @app.command("doctor")
 def doctor():
     registry = _registry()
-    print_json({"database": str(registry.dependencies.store.path), "connector": registry.dependencies.connector.mode, "agents": registry.list(), "plugins": registry.list_plugins(), "api_token_configured": bool(registry.dependencies.settings.api_token), "status": "ready_for_offline_investigations"})
+    stages: dict[str, dict] = {}
+    try:
+        registry.dependencies.store.list_cases(limit=1)
+        stages["local"] = {"status": "PASS", "database": str(registry.dependencies.store.path), "agents": registry.list()}
+    except Exception as exc:
+        stages["local"] = {"status": "FAIL", "remedy": f"Fix the writable VIGIL_DATA_DIR: {type(exc).__name__}"}
+    if registry.dependencies.settings.api_token:
+        stages["n8n"] = {"status": "PASS", "detail": "API bearer token is configured; Docker connectivity still requires a running server and firewall access.", "url": "http://host.docker.internal:8000/api/v1/investigations"}
+    else:
+        stages["n8n"] = {"status": "NOT CONFIGURED", "remedy": "Set VIGIL_API_TOKEN, then start 'vigil serve --host 0.0.0.0' only on a trusted/firewalled network."}
+    if registry.dependencies.connector.mode == "mock":
+        stages["wazuh"] = {"status": "NOT CONFIGURED", "detail": "Mock telemetry is active.", "remedy": "Set VIGIL_CONNECTOR_MODE=wazuh and the Indexer URL, read-only credentials, index pattern, and CA bundle."}
+    else:
+        now = datetime.now(timezone.utc)
+        try:
+            asyncio.run(registry.dependencies.connector.search_events("doctor", SearchFilters(start=now - timedelta(minutes=5), end=now, limit=1)))
+            stages["wazuh"] = {"status": "PASS", "detail": "Authenticated read-only Indexer sample search succeeded.", "manager": "configured" if registry.dependencies.connector.manager else "not configured (optional)"}
+        except Exception as exc:
+            stages["wazuh"] = {"status": "FAIL", "remedy": str(exc)}
+    models = {}
+    for agent_id in registry.list():
+        provider, model = registry.dependencies.model_manager.assignment(agent_id)
+        models[agent_id] = {"provider": provider, "model_id": model, **registry.dependencies.model_manager.capability(agent_id)}
+    print_json({"stages": stages, "models": models, "connector_mode": registry.dependencies.connector.mode})
 
 
 @cases_app.command("list")

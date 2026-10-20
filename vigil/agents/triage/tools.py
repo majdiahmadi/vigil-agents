@@ -46,8 +46,11 @@ def build_tools(dependencies) -> list[ToolDefinition]:
             raise PermissionError("triage search requires a scoped IP, host, or user")
         checks = ((args.source_ip, context.scope.source_ips, "source IP"), (args.host, context.scope.hosts, "host"), (args.user, context.scope.users, "user"))
         for value, allowed, label in checks:
-            if allowed and value not in allowed:
+            if value and (not allowed or value not in allowed):
                 raise PermissionError(f"{label} is outside the authorized case scope")
+        allowed_window = context.scope.time_window
+        if allowed_window and (args.start < allowed_window.start or args.end > allowed_window.end):
+            raise PermissionError("requested time window is outside the authorized case scope")
 
     async def auth(args: EventSearchArgs, context: CaseContext):
         enforce(args, context)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -27,6 +27,18 @@ class SecurityAssessment(StrEnum):
     BENIGN = "benign"
     UNKNOWN = "unknown"
     INCONCLUSIVE = "inconclusive"
+
+
+class NormalizedEventKind(StrEnum):
+    AUTH_FAILED = "auth_failed"
+    AUTH_SUCCESS = "auth_success"
+    SESSION_START = "session_start"
+    COMMAND = "command"
+    FILE_EVENT = "file_event"
+    PROCESS_EVENT = "process_event"
+    NETWORK_EVENT = "network_event"
+    MALWARE_ALERT = "malware_alert"
+    UNKNOWN = "unknown"
 
 
 class TimeWindow(BaseModel):
@@ -74,30 +86,51 @@ class AlertEnvelope(BaseModel):
         raw = payload.get("alert", payload)
         if not isinstance(raw, dict) or not raw:
             raise ValueError("alert must be a non-empty JSON object")
-        alert_id = str(raw.get("alert_id") or raw.get("id") or f"alert-{uuid4().hex[:12]}")
-        ip = raw.get("ip") or raw.get("source_ip") or raw.get("srcip")
-        host_value = raw.get("hosts") or raw.get("host") or raw.get("agent_name")
+        native = raw.get("_source", raw)
+        if not isinstance(native, dict):
+            native = raw
+        data = native.get("data") if isinstance(native.get("data"), dict) else {}
+        agent = native.get("agent") if isinstance(native.get("agent"), dict) else {}
+        rule = native.get("rule") if isinstance(native.get("rule"), dict) else {}
+        alert_id = str(raw.get("alert_id") or raw.get("_id") or native.get("id") or f"alert-{uuid4().hex[:12]}")
+        ip = raw.get("ip") or raw.get("source_ip") or raw.get("srcip") or data.get("srcip")
+        host_value = raw.get("hosts") or raw.get("host") or raw.get("agent_name") or agent.get("name")
         hosts = [str(x) for x in host_value] if isinstance(host_value, list) else ([str(host_value)] if host_value else [])
-        indicator_value = raw.get("sha256") or raw.get("hash") or raw.get("indicator")
+        user_value = raw.get("user") or data.get("srcuser") or data.get("dstuser")
+        indicator_value = raw.get("sha256") or raw.get("hash") or raw.get("indicator") or data.get("sha256")
         indicators = [str(indicator_value)] if indicator_value else []
-        observed_value = raw.get("observed_at") or raw.get("timestamp")
-        observed_at = None
+        observed_value = raw.get("observed_at") or native.get("timestamp") or native.get("@timestamp")
+        received_at = utc_now()
+        observed_dt = received_at
+        observed_at = received_at.isoformat()
+        timestamp_source = "received_at_assumption"
         if observed_value:
             try:
-                observed_at = datetime.fromisoformat(str(observed_value).replace("Z", "+00:00")).isoformat()
+                observed_dt = datetime.fromisoformat(str(observed_value).replace("Z", "+00:00"))
+                if observed_dt.tzinfo is None:
+                    raise ValueError("timezone is required")
+                observed_at = observed_dt.isoformat()
+                timestamp_source = "source_alert"
             except ValueError as exc:
-                raise ValueError("alert observed_at/timestamp must be ISO 8601") from exc
-        scope = InvestigationScope(source_ips=[str(ip)] if ip else [], hosts=hosts, indicators=indicators)
+                raise ValueError("alert observed_at/timestamp must be timezone-aware ISO 8601") from exc
+        scope = InvestigationScope(
+            source_ips=[str(ip)] if ip else [], hosts=hosts,
+            users=[str(user_value)] if user_value else [], indicators=indicators,
+            time_window=TimeWindow(start=observed_dt - timedelta(days=1), end=observed_dt + timedelta(days=1)),
+        )
         normalized = {
-            "category": str(raw.get("category") or raw.get("attack") or raw.get("type") or "unknown"),
+            "category": str(raw.get("category") or raw.get("attack") or raw.get("type") or rule.get("description") or "unknown"),
+            "description": str(raw.get("description") or rule.get("description") or native.get("full_log") or ""),
             "source_ip": ip,
             "host": hosts[0] if hosts else None,
+            "user": str(user_value) if user_value else None,
             "sha256": indicators[0] if indicators else None,
             "file_path": raw.get("file_path"),
             "observed_at": observed_at,
-            "rule_id": raw.get("rule_id") or raw.get("rule", {}).get("id") if isinstance(raw.get("rule"), dict) else raw.get("rule_id"),
+            "timestamp_source": timestamp_source,
+            "rule_id": raw.get("rule_id") or rule.get("id"),
         }
-        return cls(alert_id=alert_id, source=source, original_alert=raw, normalized_fields=normalized, asset_scope=scope)
+        return cls(alert_id=alert_id, source=source, received_at=received_at, original_alert=raw, normalized_fields=normalized, asset_scope=scope)
 
 
 class CaseContext(BaseModel):
@@ -108,6 +141,7 @@ class CaseContext(BaseModel):
     scope: InvestigationScope
     model_provider: str
     model_id: str
+    purpose: str = "investigate"
     memory: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -128,13 +162,21 @@ class EvidenceRecord(BaseModel):
     connector_mode: str
     observed_at: datetime | None = None
     retrieved_at: datetime = Field(default_factory=utc_now)
+    index_name: str | None = None
     host: str | None = None
+    agent_id: str | None = None
     user: str | None = None
     source_ip: str | None = None
     destination_ip: str | None = None
     rule_id: str | None = None
+    normalized_event_kind: NormalizedEventKind = NormalizedEventKind.UNKNOWN
+    event_count: int | None = Field(default=None, ge=1)
+    command: str | None = None
+    file_hash: str | None = None
     raw_fields: dict[str, Any] = Field(default_factory=dict)
     query_scope: dict[str, Any] = Field(default_factory=dict)
+    telemetry_coverage: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
     simulated: bool = False
 
 
@@ -144,9 +186,18 @@ class EvidenceReference(BaseModel):
     source_type: str
 
 
+class EvidenceClaim(BaseModel):
+    evidence_id: str
+    field_path: str = Field(min_length=1, max_length=200)
+    operator: Literal["eq", "contains", "gte", "lte"] = "eq"
+    expected_value: Any
+
+
 class ObservedFact(BaseModel):
     statement: str
     evidence_ids: list[str] = Field(default_factory=list)
+    kind: Literal["verified_observation", "analyst_hypothesis", "model_inference", "recommended_action"] = "verified_observation"
+    claims: list[EvidenceClaim] = Field(default_factory=list)
 
 
 class Hypothesis(BaseModel):
@@ -163,6 +214,7 @@ class ToolCallRecord(BaseModel):
     status: str
     evidence_ids: list[str] = Field(default_factory=list)
     error: str | None = None
+    duplicate: bool = False
 
 
 class AgentResult(BaseModel):
@@ -218,6 +270,8 @@ class RuntimeResult(BaseModel):
     specialist_results: list[AgentResult] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     narrative: str = ""
+    rounds: int = 0
+    model_messages: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class Clock(Protocol):
@@ -232,6 +286,7 @@ class AgentDependencies:
     validator: Any
     settings: Any
     model_manager: Any
+    threat_intel: Any = None
     clock: Clock = utc_now
     agent_registry: Any = None
 

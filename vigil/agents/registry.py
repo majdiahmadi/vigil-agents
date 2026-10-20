@@ -12,6 +12,7 @@ from vigil.integrations.wazuh.connector import WazuhTelemetryConnector
 from vigil.integrations.wazuh.indexer import WazuhIndexerClient
 from vigil.integrations.wazuh.manager import WazuhManagerClient
 from vigil.llm.model_manager import ModelManager
+from vigil.integrations.threat_intel.connector import VirusTotalHashConnector
 from vigil.plugins.manager import PluginManager, build_plugin_manager
 
 
@@ -42,7 +43,12 @@ def _connector(settings: Settings):
     if not all((url, user, password)):
         raise RuntimeError("Wazuh mode requires Indexer URL, username and password")
     verify: bool | str = os.getenv("VIGIL_WAZUH_CA_BUNDLE") or True
-    indexer = WazuhIndexerClient(url, user, password, verify=verify)
+    indexer = WazuhIndexerClient(
+        url, user, password,
+        index_pattern=os.getenv("VIGIL_WAZUH_INDEX_PATTERN", "wazuh-alerts-*"),
+        verify=verify,
+        timeout_seconds=float(os.getenv("VIGIL_WAZUH_TIMEOUT_SECONDS", "15")),
+    )
     manager = None
     if manager_url := os.getenv("VIGIL_WAZUH_MANAGER_URL"):
         if token := os.getenv("VIGIL_WAZUH_MANAGER_TOKEN"):
@@ -59,9 +65,15 @@ def build_registry(
     settings = settings or get_settings()
     store = store or VigilStore(settings.db_path)
     manager = ModelManager(store, settings.config_dir / "catalogs")
+    intel_key = os.getenv("VIGIL_VIRUSTOTAL_API_KEY")
     deps = AgentDependencies(
-        runtime=AgentRuntime(), store=store, connector=_connector(settings),
+        runtime=AgentRuntime(
+            max_rounds=settings.max_rounds,
+            max_calls_per_round=settings.max_tool_calls_per_round,
+            max_context_chars=settings.max_context_chars,
+        ), store=store, connector=_connector(settings),
         validator=EvidenceValidator(), settings=settings, model_manager=manager,
+        threat_intel=VirusTotalHashConnector(intel_key) if intel_key else None,
     )
     return AgentRegistry(deps, build_plugin_manager(deps, load_external=load_external_plugins))
 

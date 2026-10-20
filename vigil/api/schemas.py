@@ -24,6 +24,7 @@ class SubmissionResponse(BaseModel):
     status: str
     poll_url: str
     created: bool
+    schema_version: str = "1.0"
 
 
 class InvestigationStatus(BaseModel):
@@ -33,4 +34,7 @@ class InvestigationStatus(BaseModel):
     updated_at: datetime
     job: dict[str, Any] | None = None
     agent_runs: list[dict[str, Any]] = Field(default_factory=list)
+    terminal: bool = False
+    report_ready: bool = False
+    schema_version: str = "1.0"
 

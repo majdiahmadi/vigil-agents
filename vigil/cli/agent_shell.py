@@ -52,6 +52,7 @@ class AgentShell:
         self.registry = registry
         self.case_id: str | None = None
         self.json_output = json_output
+        self.conversation: list[dict[str, str]] = []
         self._session = self._build_prompt_session()
 
     def _build_prompt_session(self):
@@ -190,7 +191,8 @@ class AgentShell:
             print_case_history(self.registry.dependencies.store.list_cases(), target=console)
         elif command == "/new":
             self.case_id = None
-            console.print("[green]New case ready.[/green] Persisted history was not deleted.")
+            self.conversation.clear()
+            console.print("[green]New conversation ready.[/green] Persisted investigation history was not deleted.")
         elif command == "/json":
             self._set_json(argument)
         elif command == "/clear":
@@ -215,12 +217,15 @@ class AgentShell:
                     console.print("Session closed.")
                     return
                 continue
-            alert = AlertEnvelope.from_payload({"alert": {"category": "interactive task", "description": line}}, source="cli-chat")
-            with console.status(f"[cyan]{self.agent_id.title()} is investigating...[/cyan]", spinner="dots"):
-                result = asyncio.run(self.registry.create(self.agent_id).chat(AgentRequest(alert=alert, case_id=self.case_id)))
-            self.case_id = result.case_id
+            try:
+                with console.status(f"[cyan]{self.agent_id.title()} is responding...[/cyan]", spinner="dots"):
+                    response = asyncio.run(self.registry.create(self.agent_id).chat_message(line, self.conversation))
+            except RuntimeError as exc:
+                console.print(f"[yellow]{exc}[/yellow]")
+                continue
+            self.conversation.extend([{"role": "user", "content": line}, {"role": "assistant", "content": response}])
             if self.json_output:
-                print_json(result)
+                print_json({"agent_id": self.agent_id, "mode": "chat", "response": response})
             else:
-                print_agent_result(result, target=console)
+                console.print(Panel(response, title=self.agent_id.title(), border_style="cyan"))
 

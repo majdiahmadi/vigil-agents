@@ -23,7 +23,7 @@ Provider and connector dependencies use adapters. Agent modules never import pro
 
 The four built-in agent packages are loaded through `PluginManager`, using the same `AgentPlugin` contract available to separately installed extensions. Python package entry points under `vigil.agent_plugins` provide discovery. Plugins declare the shared services they require, are validated before registration, and cannot silently replace another agent ID. VIGIL does not download plugin code or hot-reload it at runtime.
 
-SQLite enables WAL, foreign keys, indexes, a schema version, durable queued/running/completed job states, idempotency keys, case-scoped agent memory, evidence, audit calls, and reports. A restarted worker reclaims a running job. Deploy one worker for this prototype.
+SQLite enables WAL, foreign keys, indexes, migrations, durable job states, payload-bound idempotency keys, case-scoped memory, evidence, audit calls, and reports. Workers claim atomically with owner/expiry leases; only expired running jobs are recoverable, and retries are capped. SQLite remains a controlled single-node choice.
 
 Security boundaries are enforced in Python: tool allowlists, Pydantic arguments, IP parsing, 30-day query windows, event limits, file roots, file sizes, symlink rejection, TLS verification by default, API authentication, and no execution/remediation tools.
 

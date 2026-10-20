@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
@@ -13,6 +14,10 @@ from vigil.core.models import AgentResult, AlertEnvelope, CaseReport, EvidenceRe
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+class IdempotencyConflict(ValueError):
+    pass
 
 
 class VigilStore:
@@ -45,7 +50,8 @@ class VigilStore:
                     case_id TEXT PRIMARY KEY, alert_id TEXT NOT NULL, status TEXT NOT NULL,
                     alert_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
-                CREATE UNIQUE INDEX IF NOT EXISTS ix_cases_alert ON cases(alert_id);
+                DROP INDEX IF EXISTS ix_cases_alert;
+                CREATE INDEX IF NOT EXISTS ix_cases_alert_id ON cases(alert_id);
                 CREATE TABLE IF NOT EXISTS agent_runs(
                     run_id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES cases(case_id),
                     agent_id TEXT NOT NULL, status TEXT NOT NULL, provider TEXT NOT NULL,
@@ -73,6 +79,10 @@ class VigilStore:
                     agent_id TEXT PRIMARY KEY, provider TEXT NOT NULL, model_id TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS model_capabilities(
+                    provider TEXT NOT NULL, model_id TEXT NOT NULL, capability TEXT NOT NULL,
+                    checked_at TEXT NOT NULL, PRIMARY KEY(provider, model_id)
+                );
                 CREATE TABLE IF NOT EXISTS delegations(
                     id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL,
                     source_agent TEXT NOT NULL, target_agent TEXT NOT NULL,
@@ -91,6 +101,16 @@ class VigilStore:
                 CREATE INDEX IF NOT EXISTS ix_jobs_status ON jobs(status, created_at);
                 """
             )
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(jobs)")}
+            additions = {
+                "payload_hash": "TEXT",
+                "lease_owner": "TEXT",
+                "lease_expires_at": "TEXT",
+                "heartbeat_at": "TEXT",
+            }
+            for name, kind in additions.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
 
     def create_case(self, alert: AlertEnvelope, *, reuse_alert: bool = False) -> str:
         with self.connect() as conn:
@@ -179,6 +199,18 @@ class VigilStore:
         with self.connect() as conn:
             return {str(r[0]): (str(r[1]), str(r[2])) for r in conn.execute("SELECT agent_id,provider,model_id FROM model_assignments")}
 
+    def set_model_capability(self, provider: str, model_id: str, capability: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO model_capabilities VALUES(?,?,?,?) ON CONFLICT(provider,model_id) DO UPDATE SET capability=excluded.capability,checked_at=excluded.checked_at",
+                (provider, model_id, capability, _now()),
+            )
+
+    def get_model_capability(self, provider: str, model_id: str) -> dict[str, str] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT capability,checked_at FROM model_capabilities WHERE provider=? AND model_id=?", (provider, model_id)).fetchone()
+            return {"capability": str(row[0]), "checked_at": str(row[1])} if row else None
+
     def record_delegation(self, case_id: str, source: str, target: str, purpose: str, status: str) -> None:
         with self.connect() as conn:
             conn.execute("INSERT INTO delegations(case_id,source_agent,target_agent,purpose,status,created_at) VALUES(?,?,?,?,?,?)", (case_id, source, target, purpose, status, _now()))
@@ -193,14 +225,23 @@ class VigilStore:
             return CaseReport.model_validate_json(row[0]) if row else None
 
     def enqueue_job(self, case_id: str, payload: dict[str, Any], idempotency_key: str | None) -> tuple[str, bool]:
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        payload_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             if idempotency_key:
-                row = conn.execute("SELECT job_id FROM jobs WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+                row = conn.execute("SELECT job_id,payload_hash,payload_json FROM jobs WHERE idempotency_key=?", (idempotency_key,)).fetchone()
                 if row:
+                    existing_hash = row["payload_hash"] or hashlib.sha256(str(row["payload_json"]).encode("utf-8")).hexdigest()
+                    if existing_hash != payload_hash:
+                        raise IdempotencyConflict("idempotency key was already used with a different alert payload")
                     return str(row[0]), False
             job_id = f"job-{uuid4().hex[:12]}"
             now = _now()
-            conn.execute("INSERT INTO jobs VALUES(?,?,?,?,?,0,NULL,?,?)", (job_id, case_id, "queued", json.dumps(payload), idempotency_key, now, now))
+            conn.execute(
+                "INSERT INTO jobs(job_id,case_id,status,payload_json,idempotency_key,attempts,error,created_at,updated_at,payload_hash) VALUES(?,?,?,?,?,0,NULL,?,?,?)",
+                (job_id, case_id, "queued", serialized, idempotency_key, now, now, payload_hash),
+            )
             return job_id, True
 
     def get_job_by_idempotency(self, idempotency_key: str) -> dict[str, Any] | None:
@@ -208,20 +249,39 @@ class VigilStore:
             row = conn.execute("SELECT * FROM jobs WHERE idempotency_key=?", (idempotency_key,)).fetchone()
             return dict(row) if row else None
 
-    def claim_job(self) -> dict[str, Any] | None:
+    def claim_job(self, worker_id: str = "single-worker", lease_seconds: int = 120, max_attempts: int = 3) -> dict[str, Any] | None:
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT * FROM jobs WHERE status IN ('queued','running') ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, created_at LIMIT 1").fetchone()
+            now = datetime.now(timezone.utc)
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE attempts < ? AND (status='queued' OR (status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?)) ORDER BY created_at LIMIT 1",
+                (max_attempts, now.isoformat()),
+            ).fetchone()
             if not row:
                 return None
-            conn.execute("UPDATE jobs SET status='running',attempts=attempts+1,updated_at=? WHERE job_id=?", (_now(), row["job_id"]))
-            result = dict(row)
+            lease_expires = (now + timedelta(seconds=max(30, lease_seconds))).isoformat()
+            updated = conn.execute(
+                "UPDATE jobs SET status='running',attempts=attempts+1,updated_at=?,lease_owner=?,lease_expires_at=?,heartbeat_at=? WHERE job_id=? AND (status='queued' OR lease_expires_at < ?)",
+                (now.isoformat(), worker_id, lease_expires, now.isoformat(), row["job_id"], now.isoformat()),
+            )
+            if updated.rowcount != 1:
+                return None
+            result = dict(conn.execute("SELECT * FROM jobs WHERE job_id=?", (row["job_id"],)).fetchone())
             result["status"] = "running"
             return result
 
     def update_job(self, job_id: str, status: str, error: str | None = None) -> None:
         with self.connect() as conn:
-            conn.execute("UPDATE jobs SET status=?,error=?,updated_at=? WHERE job_id=?", (status, error, _now(), job_id))
+            conn.execute("UPDATE jobs SET status=?,error=?,updated_at=?,lease_owner=NULL,lease_expires_at=NULL,heartbeat_at=NULL WHERE job_id=?", (status, error, _now(), job_id))
+
+    def heartbeat_job(self, job_id: str, worker_id: str, lease_seconds: int = 120) -> bool:
+        now = datetime.now(timezone.utc)
+        with self.connect() as conn:
+            changed = conn.execute(
+                "UPDATE jobs SET heartbeat_at=?,lease_expires_at=?,updated_at=? WHERE job_id=? AND status='running' AND lease_owner=?",
+                (now.isoformat(), (now + timedelta(seconds=max(30, lease_seconds))).isoformat(), now.isoformat(), job_id, worker_id),
+            )
+            return changed.rowcount == 1
 
     def get_job_for_case(self, case_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:

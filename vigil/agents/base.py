@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
-from vigil.core.models import AgentDependencies, AgentRequest, AgentResult, AgentStatus, CaseContext, RuntimeResult
+from vigil.core.models import AgentDependencies, AgentRequest, AgentResult, AgentStatus, AlertEnvelope, CaseContext, InvestigationScope, RuntimeResult
 from vigil.core.skills import Skill
 from vigil.core.tool_registry import ToolDefinition, ToolRegistry
 
@@ -58,10 +58,24 @@ class BaseAgent(ABC):
         provider, model_id = self.dependencies.model_manager.assignment(self.agent_id)
         run_id = f"run-{uuid4().hex[:12]}"
         scope = request.scope or request.alert.asset_scope
+        verified_memory = [
+            {
+                "evidence_id": item.evidence_id,
+                "native_event_id": item.native_event_id,
+                "source_type": item.source_type,
+                "observed_at": item.observed_at.isoformat() if item.observed_at else None,
+                "normalized_event_kind": item.normalized_event_kind.value,
+                "host": item.host,
+                "user": item.user,
+                "source_ip": item.source_ip,
+                "file_hash": item.file_hash,
+            }
+            for item in self.dependencies.store.evidence_for_case(case_id)[-20:]
+        ]
         context = CaseContext(
             case_id=case_id, alert=request.alert, agent_id=self.agent_id, run_id=run_id,
-            scope=scope, model_provider=provider, model_id=model_id,
-            memory=self.dependencies.store.load_memory(case_id, self.agent_id),
+            scope=scope, model_provider=provider, model_id=model_id, purpose=request.purpose,
+            memory=verified_memory,
         )
         tool_registry = ToolRegistry(set(config.allowed_tools), min(config.max_tool_calls, self.dependencies.settings.max_tool_calls))
         for tool in self.get_tool_specs():
@@ -101,4 +115,26 @@ class BaseAgent(ABC):
 
     async def chat(self, request: AgentRequest) -> AgentResult:
         return await self.run(request)
+
+    async def chat_message(self, message: str, history: list[dict[str, str]] | None = None) -> str:
+        """Conversational mode. It never creates a case or executes investigation tools."""
+        adapter = self.dependencies.model_manager.adapter_for(self.agent_id)
+        if adapter is None:
+            raise RuntimeError(
+                f"AI chat is unavailable for {self.get_config().display_name}: its model is Offline. "
+                "Select a cloud model with 'vigil model', or use the structured offline investigation command."
+            )
+        provider, model_id = self.dependencies.model_manager.assignment(self.agent_id)
+        context = CaseContext(
+            case_id="chat-session",
+            alert=AlertEnvelope.from_payload({"alert": {"category": "conversation"}}, source="cli-chat"),
+            agent_id=self.agent_id, run_id="chat", scope=InvestigationScope(),
+            model_provider=provider, model_id=model_id, purpose="conversation",
+        )
+        bounded = list(history or [])[-12:]
+        bounded.append({"role": "user", "content": message[:8_000]})
+        return await adapter.chat(
+            messages=bounded,
+            instructions=self.build_instructions(context) + "\nThis is conversational mode. Do not claim tools were run or fabricate alert evidence.",
+        )
 

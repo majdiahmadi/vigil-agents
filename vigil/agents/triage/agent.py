@@ -9,7 +9,7 @@ from vigil.agents.triage.schemas import TriageSummary
 from vigil.agents.triage.skills import load_skills
 from vigil.agents.triage.tools import build_tools
 from vigil.core.evidence import references
-from vigil.core.models import AgentResult, AgentStatus, CaseContext, Hypothesis, ObservedFact, RuntimeResult, SecurityAssessment
+from vigil.core.models import AgentResult, AgentStatus, CaseContext, EvidenceClaim, Hypothesis, NormalizedEventKind, ObservedFact, RuntimeResult, SecurityAssessment
 
 
 class TriageAgent(BaseAgent):
@@ -29,20 +29,28 @@ class TriageAgent(BaseAgent):
             if key in seen_native:
                 continue
             seen_native.add(key)
-            action = event.raw_fields.get("action")
-            if action == "ssh_failed":
-                attempts = int(event.raw_fields.get("attempts", 1))
+            if event.normalized_event_kind == NormalizedEventKind.AUTH_FAILED:
+                attempts = event.event_count or 1
                 summary.failed_auth_events += attempts
-                facts.append(ObservedFact(statement=f"{attempts} failed SSH authentication attempts were recorded for {event.user or 'an unknown user'} from {event.source_ip or 'an unknown source' }.", evidence_ids=[event.evidence_id]))
-            elif action == "ssh_success":
-                summary.successful_auth_events += 1
-                facts.append(ObservedFact(statement=f"A successful SSH authentication event was recorded for {event.user}; whether it was authorized is unknown.", evidence_ids=[event.evidence_id]))
-            elif action == "session_started":
-                summary.session_events += 1
-                facts.append(ObservedFact(statement="A session-start event was observed after authentication.", evidence_ids=[event.evidence_id]))
-            elif action == "command_observed":
-                summary.session_events += 1
-                facts.append(ObservedFact(statement=f"The command {event.raw_fields.get('command', '[unknown]')!r} was observed; its intent is unknown.", evidence_ids=[event.evidence_id]))
+                facts.append(ObservedFact(
+                    statement=f"{attempts} failed SSH authentication attempts were recorded for {event.user or 'an unknown user'} from {event.source_ip or 'an unknown source'}.",
+                    evidence_ids=[event.evidence_id],
+                    claims=[EvidenceClaim(evidence_id=event.evidence_id, field_path="normalized_event_kind", expected_value="auth_failed"), EvidenceClaim(evidence_id=event.evidence_id, field_path="event_count", expected_value=attempts)],
+                ))
+            elif event.normalized_event_kind == NormalizedEventKind.AUTH_SUCCESS:
+                summary.successful_auth_events += event.event_count or 1
+                facts.append(ObservedFact(
+                    statement=f"A successful SSH authentication event was recorded for {event.user or 'an unknown user'}; whether it was authorized is unknown.", evidence_ids=[event.evidence_id],
+                    claims=[EvidenceClaim(evidence_id=event.evidence_id, field_path="normalized_event_kind", expected_value="auth_success")],
+                ))
+            elif event.normalized_event_kind == NormalizedEventKind.SESSION_START:
+                summary.session_events += event.event_count or 1
+                facts.append(ObservedFact(statement="A session-start event was observed after authentication.", evidence_ids=[event.evidence_id], claims=[EvidenceClaim(evidence_id=event.evidence_id, field_path="normalized_event_kind", expected_value="session_start")]))
+            elif event.normalized_event_kind == NormalizedEventKind.COMMAND:
+                summary.session_events += event.event_count or 1
+                facts.append(ObservedFact(statement=f"The command {event.command or '[unknown]'!r} was observed; its intent is unknown.", evidence_ids=[event.evidence_id], claims=[EvidenceClaim(evidence_id=event.evidence_id, field_path="command", expected_value=event.command)]))
+            elif event.normalized_event_kind == NormalizedEventKind.UNKNOWN:
+                facts.append(ObservedFact(statement="An event with an unrecognized Wazuh layout was preserved for analyst review.", evidence_ids=[event.evidence_id], claims=[EvidenceClaim(evidence_id=event.evidence_id, field_path="normalized_event_kind", expected_value="unknown")]))
         suspicious = bool(summary.failed_auth_events and summary.successful_auth_events)
         gaps = [] if runtime_result.evidence else ["No matching events were returned; this is an evidence gap, not an all-clear result."]
         gaps.append("Authorization of the successful login was not established by the available telemetry.")

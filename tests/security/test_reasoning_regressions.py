@@ -38,6 +38,6 @@ async def test_tool_cannot_escape_case_ip_scope(registry):
         tool_registry.register(tool)
     now = datetime.now(timezone.utc)
     call, _ = await tool_registry.execute("search_authentication_events", {"source_ip": "203.0.113.9", "start": (now-timedelta(hours=1)).isoformat(), "end": now.isoformat(), "limit": 10}, context)
-    assert call.status == "failed"
+    assert call.status == "denied"
     assert "outside the authorized case scope" in call.error
 

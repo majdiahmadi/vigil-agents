@@ -14,22 +14,22 @@ class WazuhTelemetryConnector:
         self.indexer = indexer
         self.manager = manager
 
-    async def _search(self, case_id: str, filters: SearchFilters) -> list[EvidenceRecord]:
-        hits = await self.indexer.search(filters)
+    async def _search(self, case_id: str, filters: SearchFilters, kind: str) -> list[EvidenceRecord]:
+        hits = await self.indexer.search(filters, kind)
         scope = filters.model_dump(mode="json")
         return [normalize_hit(case_id, hit, scope) for hit in hits]
 
     async def search_authentication_events(self, case_id: str, filters: SearchFilters) -> list[EvidenceRecord]:
-        return await self._search(case_id, filters)
+        return await self._search(case_id, filters, "authentication")
 
     async def search_session_events(self, case_id: str, filters: SearchFilters) -> list[EvidenceRecord]:
-        return await self._search(case_id, filters)
+        return await self._search(case_id, filters, "session")
 
     async def search_events(self, case_id: str, filters: SearchFilters) -> list[EvidenceRecord]:
-        return await self._search(case_id, filters)
+        return await self._search(case_id, filters, "generic")
 
     async def search_by_indicator(self, case_id: str, filters: SearchFilters) -> list[EvidenceRecord]:
-        return await self._search(case_id, filters)
+        return await self._search(case_id, filters, "indicator")
 
     async def get_agent_context(self, agent_id: str) -> dict:
         if not self.manager:

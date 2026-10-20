@@ -1,0 +1,127 @@
+{
+  "name": "VIGIL Investigation Handoff",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "vigil-alert", "responseMode": "responseNode", "options": {}},
+      "id": "webhook",
+      "name": "Receive Alert",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "replace-after-import"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json; const payload = body.alert ? body : { alert: body }; const alertId = payload.alert.alert_id ?? payload.alert.id ?? `received-${Date.now()}`; return [{ json: { payload, idempotencyKey: `vigil-${alertId}` } }];"
+      },
+      "id": "normalize",
+      "name": "Normalize Envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/api/v1/investigations",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [
+          {"name": "Authorization", "value": "=Bearer {{$env.VIGIL_API_TOKEN}}"},
+          {"name": "X-Idempotency-Key", "value": "={{$json.idempotencyKey}}"}
+        ]},
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{JSON.stringify($json.payload)}}",
+        "options": {"timeout": 15000}
+      },
+      "id": "submit",
+      "name": "Submit to VIGIL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 0]
+    },
+    {
+      "parameters": {"amount": 5, "unit": "seconds"},
+      "id": "wait",
+      "name": "Wait 5 Seconds",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [680, 0]
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000{{$node['Submit to VIGIL'].json.poll_url}}",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "Authorization", "value": "=Bearer {{$env.VIGIL_API_TOKEN}}"}]},
+        "options": {"timeout": 15000}
+      },
+      "id": "status",
+      "name": "Poll Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 0]
+    },
+    {
+      "parameters": {"conditions": {"boolean": [{"value1": "={{$json.terminal}}", "value2": true}]}},
+      "id": "terminal",
+      "name": "Terminal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 0]
+    },
+    {
+      "parameters": {"conditions": {"string": [{"value1": "={{$json.status}}", "operation": "regex", "value2": "^(completed|partial)$"}]}},
+      "id": "reportable",
+      "name": "Report Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1340, -80]
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/api/v1/investigations/{{$node['Submit to VIGIL'].json.case_id}}/report",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "Authorization", "value": "=Bearer {{$env.VIGIL_API_TOKEN}}"}]},
+        "options": {"timeout": 15000}
+      },
+      "id": "report",
+      "name": "Get Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, -160]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{$json}}", "options": {}},
+      "id": "respond-report",
+      "name": "Return Report",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1780, -160]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { case_id: $node['Submit to VIGIL'].json.case_id, status: $json.status, error: $json.job?.error ?? 'investigation failed' } }}", "options": {"responseCode": 502}},
+      "id": "respond-failure",
+      "name": "Return Failure",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1560, 40]
+    }
+  ],
+  "connections": {
+    "Receive Alert": {"main": [[{"node": "Normalize Envelope", "type": "main", "index": 0}]]},
+    "Normalize Envelope": {"main": [[{"node": "Submit to VIGIL", "type": "main", "index": 0}]]},
+    "Submit to VIGIL": {"main": [[{"node": "Wait 5 Seconds", "type": "main", "index": 0}]]},
+    "Wait 5 Seconds": {"main": [[{"node": "Poll Status", "type": "main", "index": 0}]]},
+    "Poll Status": {"main": [[{"node": "Terminal?", "type": "main", "index": 0}]]},
+    "Terminal?": {"main": [[{"node": "Report Available?", "type": "main", "index": 0}], [{"node": "Wait 5 Seconds", "type": "main", "index": 0}]]},
+    "Report Available?": {"main": [[{"node": "Get Report", "type": "main", "index": 0}], [{"node": "Return Failure", "type": "main", "index": 0}]]},
+    "Get Report": {"main": [[{"node": "Return Report", "type": "main", "index": 0}]]}
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"},
+  "active": false,
+  "versionId": "00000000-0000-4000-8000-000000000001",
+  "meta": {"templateCredsSetupCompleted": false},
+  "tags": []
+}

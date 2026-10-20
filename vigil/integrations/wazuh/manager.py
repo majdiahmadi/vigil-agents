@@ -5,6 +5,10 @@ import httpx
 
 class WazuhManagerClient:
     def __init__(self, base_url: str, token: str, *, verify: bool | str = True, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        if not base_url.lower().startswith("https://"):
+            raise ValueError("Wazuh Manager URL must use HTTPS")
+        if verify is False:
+            raise ValueError("TLS verification cannot be disabled")
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.verify = verify

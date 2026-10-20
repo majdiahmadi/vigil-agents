@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
 
@@ -24,6 +25,10 @@ class ModelCatalogError(RuntimeError):
 
 
 class ModelCatalog:
+    max_pages = 20
+    max_models = 10_000
+    max_response_bytes = 2 * 1024 * 1024
+
     def __init__(self, cache_dir: Path) -> None:
         self.cache_dir = cache_dir
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -34,16 +39,22 @@ class ModelCatalog:
             return self._read_cache(cache, provider), False
         headers = {"Authorization": f"Bearer {api_key}"}
         url = f"{provider.base_url.rstrip('/')}{provider.models_path}"
+        allowed_origin = self._origin(provider.base_url)
         models: dict[str, ModelInfo] = {}
         try:
-            async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(20, connect=5), transport=transport) as client:
-                for _ in range(20):
+            async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(20, connect=5), transport=transport, follow_redirects=False) as client:
+                for _ in range(self.max_pages):
+                    self._validate_url(url, allowed_origin)
                     response = await client.get(url)
                     if response.status_code in (401, 403):
                         raise ModelCatalogError("provider rejected the API key")
                     if response.status_code == 429:
                         raise ModelCatalogError("provider rate limit reached; retry later")
+                    if 300 <= response.status_code < 400:
+                        raise ModelCatalogError("provider catalog redirect was refused")
                     response.raise_for_status()
+                    if len(response.content) > self.max_response_bytes:
+                        raise ModelCatalogError("provider model catalog response is too large")
                     payload = response.json()
                     items = payload.get("data", payload.get("models", []))
                     if not isinstance(items, list):
@@ -52,16 +63,20 @@ class ModelCatalog:
                         if isinstance(item, str):
                             item = {"id": item}
                         model_id = str(item.get("id") or item.get("name") or "").strip()
-                        if model_id:
+                        if model_id and len(model_id) <= 300 and not any(ord(char) < 32 for char in model_id):
                             models[model_id] = ModelInfo(model_id, str(item.get("name") or model_id), provider.provider_id, item)
+                            if len(models) > self.max_models:
+                                raise ModelCatalogError("provider model catalog exceeds the configured limit")
                     next_url = payload.get("next")
                     if next_url:
-                        url = str(next_url)
+                        candidate = urljoin(url, str(next_url))
+                        self._validate_url(candidate, allowed_origin)
+                        url = candidate
                         continue
                     if payload.get("has_more") and items:
                         last = items[-1]
                         last_id = last.get("id") if isinstance(last, dict) else last
-                        url = f"{provider.base_url.rstrip('/')}{provider.models_path}?after={last_id}"
+                        url = f"{provider.base_url.rstrip('/')}{provider.models_path}?after={quote(str(last_id), safe='')}"
                         continue
                     break
         except ModelCatalogError:
@@ -88,4 +103,17 @@ class ModelCatalog:
     def page(models: list[ModelInfo], page: int, page_size: int = 20) -> list[ModelInfo]:
         start = max(page, 0) * max(1, min(page_size, 100))
         return models[start : start + page_size]
+
+    @staticmethod
+    def _origin(url: str) -> tuple[str, str, int | None]:
+        parsed = urlsplit(url)
+        return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
+
+    @classmethod
+    def _validate_url(cls, url: str, allowed_origin: tuple[str, str, int | None]) -> None:
+        parsed = urlsplit(url)
+        if parsed.username or parsed.password or parsed.fragment:
+            raise ModelCatalogError("provider pagination URL is invalid")
+        if parsed.scheme.lower() != "https" or cls._origin(url) != allowed_origin:
+            raise ModelCatalogError("provider pagination URL changed origin; request refused")
 
