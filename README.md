@@ -25,7 +25,7 @@ After installation and activation, the shortest start command is simply:
 vigil
 ```
 
-The bare command opens the Orchestrator chat, similar to starting Codex with `codex`. Use `/help` inside the chat. The explicit `vigil orchestrator chat` form remains available.
+The bare command opens a Hermes-style Orchestrator chat. Use `/help` inside the chat. `vigil chat`, `vigil chat --agent triage`, and the original `vigil orchestrator chat` form are also available.
 
 ## Immediate offline demo
 
@@ -40,7 +40,7 @@ vigil orchestrator investigate --alert .\fixtures\alerts\ssh_bruteforce.json
 vigil cases list
 ```
 
-Interactive shells use the same implementation and commands: `/help`, `/model`, `/case`, `/history`, `/clear`, `/exit`.
+Interactive shells use the same interface and readable investigation summaries. Important commands are `/help`, `/status`, `/agent`, `/model`, `/tools`, `/case`, `/history`, `/new`, `/json`, `/clear`, and `/exit`. Slash commands support Tab completion when the project dependencies are installed.
 
 ```powershell
 vigil orchestrator chat

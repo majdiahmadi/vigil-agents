@@ -11,7 +11,7 @@ from rich.table import Table
 from vigil.agents.registry import build_registry
 from vigil.cli.agent_shell import AgentShell
 from vigil.cli.model_menu import run_model_wizard
-from vigil.cli.output import print_json
+from vigil.cli.output import print_agent_result, print_json
 from vigil.cli.provider_menu import manage_credentials
 from vigil.core.models import AgentRequest, AlertEnvelope
 
@@ -24,14 +24,31 @@ console = Console()
 
 
 @app.callback(invoke_without_command=True)
-def main(ctx: typer.Context) -> None:
-    """Open the Orchestrator chat when VIGIL is run without a subcommand."""
+def main(
+    ctx: typer.Context,
+    agent: str = typer.Option("orchestrator", "--agent", "-a", help="Agent used by the interactive session"),
+    query: str | None = typer.Option(None, "--query", "-q", help="Run one investigation request and exit"),
+    json_output: bool = typer.Option(False, "--json", help="Print one-shot or chat results as JSON"),
+) -> None:
+    """Start an interactive VIGIL investigation session."""
     if ctx.invoked_subcommand is None:
-        AgentShell("orchestrator", _registry()).run()
+        _validate_agent(agent)
+        registry = _registry()
+        if query:
+            _run_query(agent, query, registry, json_output=json_output)
+        else:
+            shell = AgentShell(agent, registry)
+            shell.json_output = json_output
+            shell.run()
 
 
 def _registry():
     return build_registry()
+
+
+def _validate_agent(agent_id: str) -> None:
+    if agent_id not in {"orchestrator", "triage", "malware", "hunter"}:
+        raise typer.BadParameter("agent must be orchestrator, triage, malware, or hunter")
 
 
 def _load_alert(path: Path) -> AlertEnvelope:
@@ -48,6 +65,33 @@ def _run(agent_id: str, alert: Path) -> None:
     registry = _registry()
     result = asyncio.run(registry.create(agent_id).run(AgentRequest(alert=_load_alert(alert))))
     print_json(result)
+
+
+def _run_query(agent_id: str, query: str, registry, *, json_output: bool = False) -> None:
+    alert = AlertEnvelope.from_payload({"alert": {"category": "interactive task", "description": query}}, source="cli-query")
+    with console.status(f"[cyan]{agent_id.title()} is investigating...[/cyan]", spinner="dots"):
+        result = asyncio.run(registry.create(agent_id).chat(AgentRequest(alert=alert)))
+    if json_output:
+        print_json(result)
+    else:
+        print_agent_result(result, target=console)
+
+
+@app.command("chat")
+def chat(
+    agent: str = typer.Option("orchestrator", "--agent", "-a", help="Agent to use"),
+    query: str | None = typer.Option(None, "--query", "-q", help="Run one request and exit"),
+    json_output: bool = typer.Option(False, "--json", help="Print results as JSON"),
+):
+    """Start a Hermes-style interactive session, or run one query."""
+    _validate_agent(agent)
+    registry = _registry()
+    if query:
+        _run_query(agent, query, registry, json_output=json_output)
+    else:
+        shell = AgentShell(agent, registry)
+        shell.json_output = json_output
+        shell.run()
 
 
 def _agent_group(agent_id: str, action: str):
@@ -101,8 +145,7 @@ def model_list(provider: str = typer.Option(..., "--provider"), search: str = ty
 
 @model_app.command("select")
 def model_select(agent: str = typer.Option(..., "--agent")):
-    if agent not in {"orchestrator", "triage", "malware", "hunter"}:
-        raise typer.BadParameter("agent must be orchestrator, triage, malware, or hunter")
+    _validate_agent(agent)
     asyncio.run(run_model_wizard(_registry().dependencies.model_manager, agent))
 
 

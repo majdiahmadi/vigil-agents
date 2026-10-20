@@ -20,3 +20,18 @@ def test_bare_vigil_opens_orchestrator_chat(monkeypatch):
 
     assert result.exit_code == 0
     assert calls == [("orchestrator", fake_registry), ("run", fake_registry)]
+
+
+def test_chat_is_a_top_level_command():
+    result = CliRunner().invoke(app, ["chat", "--help"])
+
+    assert result.exit_code == 0
+    assert "Hermes-style interactive session" in result.output
+    assert "--agent" in result.output
+
+
+def test_invalid_root_agent_is_explained():
+    result = CliRunner().invoke(app, ["--agent", "unknown"])
+
+    assert result.exit_code != 0
+    assert "agent must be orchestrator, triage, malware, or hunter" in result.output
