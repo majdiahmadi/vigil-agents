@@ -1,0 +1,2 @@
+{"alert":{"alert_id":"file-demo-001","category":"suspicious file","sha256":"7ec80312ffc151d76ad9b789ee04139a89b9156878ecfe7729d1a9f7dde1222c","file_path":"synthetic_payload.txt","host":"lab-01","observed_at":"2026-10-19T11:00:00Z"}}
+

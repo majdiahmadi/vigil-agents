@@ -1,0 +1,11 @@
+[
+  {"event_id":"log-001","timestamp":"2026-10-19T10:00:00Z","kind":"authentication","action":"ssh_failed","attempts":15,"source_ip":"192.0.2.10","destination_ip":"10.0.0.10","host":"web-01","user":"admin","agent_id":"001","rule_id":"5710"},
+  {"event_id":"log-002","timestamp":"2026-10-19T10:07:00Z","kind":"authentication","action":"ssh_success","source_ip":"192.0.2.10","destination_ip":"10.0.0.10","host":"web-01","user":"admin","agent_id":"001","rule_id":"5715","authorization_status":"unknown"},
+  {"event_id":"session-001","timestamp":"2026-10-19T10:07:03Z","kind":"session","action":"session_started","source_ip":"192.0.2.10","destination_ip":"10.0.0.10","host":"web-01","user":"admin","agent_id":"001","rule_id":"5501"},
+  {"event_id":"session-002","timestamp":"2026-10-19T10:08:00Z","kind":"command","action":"command_observed","command":"whoami","source_ip":"192.0.2.10","destination_ip":"10.0.0.10","host":"web-01","user":"admin","agent_id":"001","rule_id":"5502","intent":"unknown"},
+  {"event_id":"file-001","timestamp":"2026-10-19T11:00:00Z","kind":"file","action":"file_created","host":"lab-01","user":"student","sha256":"7ec80312ffc151d76ad9b789ee04139a89b9156878ecfe7729d1a9f7dde1222c","filename":"synthetic_payload.txt","agent_id":"002","rule_id":"554"},
+  {"event_id":"hunt-001","timestamp":"2026-10-19T12:00:00Z","kind":"network","action":"outbound_connection","source_ip":"10.0.0.21","destination_ip":"198.51.100.50","host":"ws-21","user":"alice","agent_id":"021","rule_id":"86001"},
+  {"event_id":"hunt-002","timestamp":"2026-10-19T12:04:00Z","kind":"network","action":"outbound_connection","source_ip":"10.0.0.22","destination_ip":"198.51.100.50","host":"ws-22","user":"bob","agent_id":"022","rule_id":"86001"},
+  {"event_id":"hunt-003","timestamp":"2026-10-19T12:10:00Z","kind":"dns","action":"dns_query","source_ip":"10.0.0.21","destination_ip":"10.0.0.2","host":"ws-21","user":"alice","query":"updates.example.invalid","agent_id":"021","rule_id":"86002","alternate_explanation":"shared software update service"}
+]
+

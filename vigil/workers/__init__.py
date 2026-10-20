@@ -1,0 +1,2 @@
+"""Durable investigation worker."""
+

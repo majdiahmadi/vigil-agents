@@ -1,0 +1,2 @@
+"""VIGIL command-line interface."""
+

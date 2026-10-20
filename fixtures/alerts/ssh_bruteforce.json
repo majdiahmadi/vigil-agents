@@ -1,0 +1,2 @@
+{"alert":{"alert_id":"ssh-demo-001","attack":"SSH Brute Force","ip":"192.0.2.10","attempts":15,"host":"web-01","observed_at":"2026-10-19T10:00:00Z"}}
+

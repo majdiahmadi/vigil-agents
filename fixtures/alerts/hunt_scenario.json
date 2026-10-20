@@ -1,0 +1,2 @@
+{"alert":{"alert_id":"hunt-demo-001","category":"multi-host campaign hypothesis","ip":"198.51.100.50","indicator":"198.51.100.50","hosts":["ws-21","ws-22"],"observed_at":"2026-10-19T12:00:00Z"}}
+
